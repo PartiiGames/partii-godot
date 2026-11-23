@@ -1,0 +1,8 @@
+# Godot's Asset Library downloads this repo's zip: keep only the add-on in it.
+# Everything except addons/ is export-ignore, so GitHub's zip (git archive) leaves it out.
+/**              export-ignore
+/addons          -export-ignore
+/addons/**       -export-ignore
+# Line endings stay as written.
+* text=auto eol=lf
+*.png binary
