@@ -572,7 +572,7 @@ func _api_post(path: String, body: Dictionary) -> Dictionary:
 	d["status_code"] = res[1]
 	if int(res[1]) >= 400:
 		var e = d.get("error", d)
-		return {"ok": false, "reason": str(e.get("code", "failed")) if e is Dictionary else "failed", "message": str(e.get("message", "")) if e is Dictionary else "", "status_code": res[1]}
+		return {"ok": false, "reason": str(e.get("code", "failed")) if e is Dictionary else "failed", "message": str(e.get("message", "")) if e is Dictionary else "", "status_code": res[1], "interval_s": d.get("interval_s", 0)}
 	d["ok"] = true
 	return d
 
@@ -601,7 +601,7 @@ func sign_in_with_browser(return_url := "") -> Dictionary:
 		var p := await _api_post("/v1/players/browser-login/poll", {"poll_token": st.poll_token})
 		if not p.ok:
 			if p.get("reason") == "slow_down":
-				interval = minf(interval + 5.0, 60.0)
+				interval = minf(maxf(float(p.get("interval_s", 0)), interval + 5.0), 60.0)
 				continue
 			if p.get("reason") == "offline":
 				continue
