@@ -11,7 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 godot = "0.4"
-partii = { git = "https://github.com/PartiiGames/partii-sdk", tag = "v0.2.1", default-features = false, features = ["account", "net"] }
+partii = { version = "0.2.1", default-features = false, features = ["account", "net"] }
 serde_json = "1"
 
 # The player's sign-in token in the OS store: Keychain (macOS), Credential Manager (Windows),
