@@ -223,6 +223,7 @@ func available() -> bool:
 
 ## The version is the project's application/config/version (Project Settings), for analytics.
 func configure(game: String, key: String, api := "") -> Dictionary:
+	_cfg = {"game": game, "key": key, "api": api if api != "" else "https://api.partii.games"}
 	var r := await _call("configure", [game, key, api, str(ProjectSettings.get_setting("application/config/version", ""))])
 	if r.get("ok"):
 		track("motion", {"state": _state})
@@ -537,3 +538,84 @@ func _sync_room() -> void:
 	var r = JSON.parse_string(str(_sdk.room()))
 	if r is Dictionary:
 		_room = r
+
+
+# --- Browser sign-in (native: desktop, phones, consoles) ---
+# POST /v1/players/browser-login/start, then poll until the player approves in their browser (or on
+# another device with the code). Phones pass a return_url (the game's registered deep link); desktop
+# and consoles show code_display and verify_url. The guest's progress merges into the account.
+
+var _cfg := {}
+var _player_token := ""
+
+## The browser opened (or show these on a TV): code like "BCDF-2345" and the page to enter it on.
+signal browser_login_code(code: String, verify_url: String)
+signal player_changed(player: Dictionary)
+
+func _api_post(path: String, body: Dictionary) -> Dictionary:
+	if _cfg.is_empty():
+		return {"ok": false, "reason": "not_configured"}
+	var h := HTTPRequest.new()
+	h.timeout = 20.0
+	add_child(h)
+	var headers := PackedStringArray(["content-type: application/json", "x-partii-key: %s" % _cfg.key])
+	var err := h.request(str(_cfg.api) + path, headers, HTTPClient.METHOD_POST, JSON.stringify(body))
+	if err != OK:
+		h.queue_free()
+		return {"ok": false, "reason": "offline", "message": error_string(err)}
+	var res: Array = await h.request_completed
+	h.queue_free()
+	if res[0] != HTTPRequest.RESULT_SUCCESS:
+		return {"ok": false, "reason": "offline", "status": 0}
+	var d = JSON.parse_string((res[3] as PackedByteArray).get_string_from_utf8())
+	d = d if d is Dictionary else {}
+	d["status_code"] = res[1]
+	if int(res[1]) >= 400:
+		var e = d.get("error", d)
+		return {"ok": false, "reason": str(e.get("code", "failed")) if e is Dictionary else "failed", "message": str(e.get("message", "")) if e is Dictionary else "", "status_code": res[1]}
+	d["ok"] = true
+	return d
+
+## Sign in to a Partii account through the browser (native builds). return_url: phones only, a deep link
+## registered for the game. → {ok, player, merged} | {ok: false, reason: denied | kid_account | expired | ...}
+func sign_in_with_browser(return_url := "") -> Dictionary:
+	var platform := "desktop"
+	if OS.has_feature("ios"):
+		platform = "ios"
+	elif OS.has_feature("android"):
+		platform = "android"
+	var body := {"game": _cfg.get("game", ""), "platform": platform}
+	if return_url != "":
+		body["return_url"] = return_url
+	if _player_token != "":
+		body["guest_token"] = _player_token
+	var st := await _api_post("/v1/players/browser-login/start", body)
+	if not st.ok:
+		return st
+	browser_login_code.emit(str(st.get("code_display", st.get("code", ""))), str(st.get("verify_url", "")))
+	OS.shell_open(str(st.get("url", st.get("verify_url", ""))))
+	var interval := float(st.get("interval_s", 5))
+	var until := Time.get_ticks_msec() + int(float(st.get("expires_in", 600)) * 1000.0)
+	while Time.get_ticks_msec() < until:
+		await get_tree().create_timer(interval, true).timeout
+		var p := await _api_post("/v1/players/browser-login/poll", {"poll_token": st.poll_token})
+		if not p.ok:
+			if p.get("reason") == "slow_down":
+				interval = minf(interval + 5.0, 60.0)
+				continue
+			if p.get("reason") == "offline":
+				continue
+			return p
+		match str(p.get("status", "")):
+			"pending":
+				interval = float(p.get("interval_s", interval))
+			"approved":
+				_player_token = str(p.get("player_token", ""))
+				var pl: Dictionary = p.get("player", {})
+				player_changed.emit(pl)
+				return {"ok": true, "player": pl, "merged": p.get("merged", false)}
+			"denied":
+				return {"ok": false, "reason": str(p.get("reason", "denied")), "message": str(p.get("message", ""))}
+			"used", "expired":
+				return {"ok": false, "reason": str(p.status)}
+	return {"ok": false, "reason": "expired"}
