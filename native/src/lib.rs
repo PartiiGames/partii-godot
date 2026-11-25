@@ -45,7 +45,7 @@ impl PartiiNative {
     }
     #[func]
     fn player_id(&self) -> GString {
-        self.acct.as_ref().and_then(|a| a.player_id()).unwrap_or_default().into()
+        self.acct.as_ref().and_then(|a| a.player_id()).unwrap_or_default().pipe_gs()
     }
     #[func]
     fn is_guest(&self) -> bool {
@@ -53,12 +53,12 @@ impl PartiiNative {
     }
     #[func]
     fn error(&self) -> GString {
-        self.acct.as_ref().and_then(|a| a.error()).unwrap_or_default().into()
+        self.acct.as_ref().and_then(|a| a.error()).unwrap_or_default().pipe_gs()
     }
     /// The slot's JSON ("" before the first save).
     #[func]
     fn read_save(&self, slot: GString) -> GString {
-        self.acct.as_ref().and_then(|a| a.read_save(&slot.to_string())).unwrap_or_default().into()
+        self.acct.as_ref().and_then(|a| a.read_save(&slot.to_string())).unwrap_or_default().pipe_gs()
     }
     #[func]
     fn write_save(&self, slot: GString, json: GString) -> bool {
@@ -111,7 +111,7 @@ impl PartiiNative {
     /// Events since the last call, as a JSON array (messages as {ev: "message", from, bytes: [..]}).
     #[func]
     fn rooms_poll(&self) -> GString {
-        self.net.as_ref().map(|e| serde_json::to_string(&e.poll()).unwrap_or_else(|_| "[]".into())).unwrap_or_else(|| "[]".into()).into()
+        self.net.as_ref().map(|e| serde_json::to_string(&e.poll()).unwrap_or_else(|_| "[]".into())).unwrap_or_else(|| "[]".into()).pipe_gs()
     }
     #[func]
     fn create_room(&self, game: GString, kind: GString, name: GString, meta_json: GString, settings_json: GString) -> i64 {
@@ -159,10 +159,19 @@ impl PartiiNative {
     }
     #[func]
     fn net_stats(&self) -> GString {
-        self.net.as_ref().map(|e| e.stats().to_string()).unwrap_or_else(|| "{}".into()).into()
+        self.net.as_ref().map(|e| e.stats().to_string()).unwrap_or_else(|| "{}".into()).pipe_gs()
     }
 }
 
 fn json(s: &GString) -> serde_json::Value {
     serde_json::from_str(&s.to_string()).unwrap_or(serde_json::Value::Null)
+}
+
+trait PipeGs {
+    fn pipe_gs(self) -> GString;
+}
+impl PipeGs for String {
+    fn pipe_gs(self) -> GString {
+        GString::from(self.as_str())
+    }
 }
