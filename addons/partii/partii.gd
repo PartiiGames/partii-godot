@@ -155,6 +155,8 @@ func _ready() -> void:
 			push_warning("Partii: partii-sdk.js isn't in the export (add addons/partii/partii-sdk.js to include_filter)")
 
 func _process(_delta: float) -> void:
+	if _rooms_on:
+		_pump_rooms()
 	if _s == null:
 		return
 	var v := bool(_s.visible)
@@ -339,3 +341,199 @@ func is_playing() -> bool:
 func track(event: String, props := {}) -> void:
 	if _sdk != null:
 		_call("track", [event, props])
+
+
+# --- Rooms, lobbies, Quick Play (web: partii-net's engine, loaded on the first room call) ---
+# The netcode rule: the host runs the world; play traffic is unreliable and byte-packed, and the newest
+# state wins (PartiiSnapshots / PartiiInputs in net.gd do the ring buffers). send() is unreliable only;
+# send_reliable_setup() is for rare setup messages, never gameplay. Reliable state goes in room meta
+# (update_room, host) and member meta (update_me). Players just join: `kind` is the game's own field.
+
+## A send() to everyone in the room.
+const BROADCAST := 65535
+
+signal room_joined(room: Dictionary)
+## reason: ended, host_left, host_lost, kicked, version_mismatch, expired, timeout
+signal room_left(reason: String)
+signal room_updated(room: Dictionary)
+signal member_joined(member: Dictionary)
+signal member_updated(member: Dictionary)
+signal member_left(mid: int, reason: String)
+## The member's app went to the background or its socket dropped; it keeps its seat until `until` (ms).
+signal member_away(mid: int, until: int)
+signal member_back(mid: int)
+signal message(from: int, bytes: PackedByteArray)
+signal online_changed(online: bool)
+signal peer_connected(mid: int, path: String)
+
+var _room := {}
+var _rooms_on := false
+var _online := false
+
+## "web", "native" (later: the GDExtension) or "none".
+func backend() -> String:
+	return "web" if _sdk != null else "none"
+
+## What this build can do: "rooms", "saves", "shop", "scores", "motion".
+func has(feature: String) -> bool:
+	if _sdk == null:
+		return feature == "motion" and not _web
+	return feature in ["rooms", "saves", "shop", "scores", "motion", "lobbies"]
+
+func _net_version() -> String:
+	var v := str(ProjectSettings.get_setting("partii/net_version", ""))
+	return v if v != "" else str(ProjectSettings.get_setting("application/config/version", "0")).replace(" ", "_")
+
+func _start_rooms() -> Dictionary:
+	if _rooms_on:
+		return {"ok": true}
+	if _sdk == null:
+		return {"ok": false, "reason": "unavailable"}
+	if not bool(_sdk.roomsReady()):
+		var js := FileAccess.open("res://addons/partii/partii-engine.js", FileAccess.READ)
+		var wasm := FileAccess.get_file_as_bytes("res://addons/partii/partii-engine.wasm")
+		if js == null or wasm.is_empty():
+			push_warning("Partii: rooms need addons/partii/partii-engine.js and .wasm in the export (include_filter)")
+			return {"ok": false, "reason": "unavailable", "message": "partii-engine files aren't in the export"}
+		JavaScriptBridge.eval(js.get_as_text(), true)
+		var r := await _call("roomsStart", [Marshalls.raw_to_base64(wasm)])
+		if not r.get("ok", false):
+			return r
+	_rooms_on = true
+	return {"ok": true}
+
+func _entered(r: Dictionary) -> Dictionary:
+	if r.get("ok", false):
+		_room = r.get("room", {})
+	return r
+
+## Host a room. opts: {max, kind, name, meta, listing: {name, mode, map, visibility, tags} (null: by code only)}.
+## → {ok, room: {code, host, you, members, meta}} | {ok: false, reason} (family_blocked for a kid's account).
+func create_room(opts := {}) -> Dictionary:
+	var s := await _start_rooms()
+	if not s.ok:
+		return s
+	var o := opts.duplicate()
+	o["net_version"] = _net_version()
+	return _entered(await _call("createRoom", [o]))
+
+## Join by code. opts: {kind, name, meta, password}.
+func join_room(code: String, opts := {}) -> Dictionary:
+	var s := await _start_rooms()
+	if not s.ok:
+		return s
+	var o := opts.duplicate()
+	o["net_version"] = _net_version()
+	return _entered(await _call("joinRoom", [code, o]))
+
+## The best open lobby for this build → {ok, code} (code null: none open, so host one).
+func quick_play(opts := {}) -> Dictionary:
+	var o := opts.duplicate()
+	o["net_version"] = _net_version()
+	return await _call("quickPlay", [o])
+
+## Open lobbies, nearest first. opts: {mode, region, sort, limit, has_space} → {ok, enabled, lobbies}.
+func list_lobbies(opts := {}) -> Dictionary:
+	var o := opts.duplicate()
+	o["net_version"] = _net_version()
+	return await _call("listLobbies", [o])
+
+func leave_room() -> void:
+	if _rooms_on:
+		_call("leaveRoom")
+	_room = {}
+
+## Host only.
+func kick(mid: int) -> void:
+	_call("kick", [mid])
+
+## Host only: room fields (meta, joinable, ...). The reliable channel for game state that must arrive.
+func update_room(patch: Dictionary) -> void:
+	_call("updateRoom", [patch])
+
+## Host only: list the room in lobbies (or null to unlist).
+func set_listing(listing) -> void:
+	_call("setListing", [listing])
+
+## Your own name and/or meta (null keeps it); the others get member_updated.
+func update_me(name = null, meta = null) -> void:
+	_call("updateMe", [name, meta])
+
+## Play traffic: unreliable, at most 1199 bytes. to: a member's mid or Partii.BROADCAST.
+func send(to: int, bytes: PackedByteArray) -> void:
+	if _rooms_on and bytes.size() > 0:
+		_sdk.send(to, Marshalls.raw_to_base64(bytes))
+
+## NOT for gameplay: a rare reliable setup message (a seed, a loadout). Use room meta first.
+func send_reliable_setup(to: int, bytes: PackedByteArray) -> void:
+	if _rooms_on and bytes.size() > 0:
+		_sdk.sendSetup(to, Marshalls.raw_to_base64(bytes))
+
+func room() -> Dictionary:
+	return _room
+
+func in_room() -> bool:
+	return not _room.is_empty()
+
+func my_mid() -> int:
+	return int(_room.get("you", -1))
+
+func is_host() -> bool:
+	return in_room() and int(_room.get("host", -2)) == my_mid()
+
+func online() -> bool:
+	return _online
+
+func net_stats() -> Dictionary:
+	if not _rooms_on:
+		return {}
+	var d = JSON.parse_string(str(_sdk.netStats()))
+	return d if d is Dictionary else {}
+
+func _pump_rooms() -> void:
+	var evs = JSON.parse_string(str(_sdk.roomsPoll()))
+	if not evs is Array:
+		return
+	for e in evs:
+		match str(e.get("ev", "")):
+			"online":
+				_online = true
+				online_changed.emit(true)
+			"offline":
+				_online = false
+				online_changed.emit(false)
+			"created", "joined", "resumed":
+				_room = e.get("room", _room)
+				room_joined.emit(_room)
+			"room_updated":
+				_room = e.get("room", _room)
+				room_updated.emit(_room)
+			"member_joined":
+				_sync_room()
+				member_joined.emit(e.get("member", {}))
+			"member_updated":
+				_sync_room()
+				member_updated.emit(e.get("member", {}))
+			"member_left":
+				_sync_room()
+				member_left.emit(int(e.get("mid", -1)), str(e.get("reason", "")))
+			"member_away", "member_suspended":
+				_sync_room()
+				member_away.emit(int(e.get("mid", -1)), int(e.get("until", 0)))
+			"member_back", "member_resumed":
+				_sync_room()
+				member_back.emit(int(e.get("mid", -1)))
+			"room_closed":
+				_room = {}
+				room_left.emit(str(e.get("reason", "")))
+			"message":
+				message.emit(int(e.get("from", -1)), Marshalls.base64_to_raw(str(e.get("data", ""))))
+			"peer_connected":
+				peer_connected.emit(int(e.get("mid", -1)), str(e.get("path", "")))
+			"error":
+				push_warning("Partii rooms: %s" % e.get("message", ""))
+
+func _sync_room() -> void:
+	var r = JSON.parse_string(str(_sdk.room()))
+	if r is Dictionary:
+		_room = r

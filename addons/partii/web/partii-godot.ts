@@ -184,8 +184,104 @@ const calls: Record<string, (...a: any[]) => Promise<unknown>> = {
   },
 };
 
+// Rooms (partii-net's engine, PROTOCOL.md; docs/GUIDE.md "Rooms"). The engine is loaded on the first
+// room call: GDScript evals ../partii-engine.js and passes ../partii-engine.wasm (base64) to roomsStart.
+// Play traffic is unreliable only (Sterling's netcode rule: the host runs the world, ring buffers, newest
+// wins); sendSetup is the one reliable path and is not for gameplay. Events queue here and GDScript takes
+// them every frame with roomsPoll() (synchronous), as signals.
+let eng: any = null;
+const pending = new Map<number, (e: any) => void>();
+let queue: any[] = [];
+let roomNow: any = null;
+const toB64 = (a: ArrayLike<number>) => { let s = ""; for (let i = 0; i < a.length; i++) s += String.fromCharCode(a[i]); return btoa(s); };
+const fromB64 = (b: string) => Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
+const setMember = (m: any) => { if (roomNow) roomNow.members = [...(roomNow.members ?? []).filter((x: any) => x.mid !== m.mid), m]; };
+const setStatus = (mid: number, status: string) => { const m = roomNow?.members?.find((x: any) => x.mid === mid); if (m) m.status = status; };
+function pump() {
+  if (!eng) return;
+  let evs: any[];
+  try { evs = JSON.parse(eng.poll()); } catch { return; }
+  for (const e of evs) {
+    switch (e.ev) {
+      case "created": case "joined": case "resumed": if (e.room) roomNow = e.room; break;
+      case "room_updated": roomNow = e.room; break;
+      case "member_joined": case "member_updated": setMember(e.member); break;
+      case "member_left": if (roomNow) roomNow.members = roomNow.members.filter((x: any) => x.mid !== e.mid); break;
+      case "member_away": case "member_suspended": setStatus(e.mid, "suspended"); break;
+      case "member_back": case "member_resumed": setStatus(e.mid, "active"); break;
+      case "room_closed": roomNow = null; break;
+      case "message": queue.push({ ev: "message", from: e.from, data: toB64(e.bytes) }); continue;
+      case "rate_limited": continue; // the Failed that follows carries it
+    }
+    const r = typeof e.req === "number" ? pending.get(e.req) : undefined;
+    if (r && (e.ev === "created" || e.ev === "joined" || e.ev === "failed")) { pending.delete(e.req); r(e); if (e.ev === "failed") continue; }
+    queue.push(e);
+  }
+}
+const answer = (req: number) => new Promise<any>((res) => {
+  pending.set(req, res);
+  const t = setInterval(() => { pump(); if (!pending.has(req)) clearInterval(t); }, 20);
+  setTimeout(() => { if (pending.delete(req)) { clearInterval(t); res({ ev: "failed", code: "timeout", message: "no answer from Partii in 20 s" }); } }, 20_000);
+});
+const roomReply = (e: any) => (e.ev === "failed" ? { ok: false, reason: e.code, message: e.message } : { ok: true, room: e.room });
+const needRooms = () => { if (!eng) throw new PartiiError("rooms_not_started", "the rooms engine isn't loaded", "", 0, null); return eng; };
+document.addEventListener("visibilitychange", () => { if (!eng) return; if (document.visibilityState === "hidden") eng.away(); else eng.back(); });
+addEventListener("pagehide", () => eng?.away());
+const listing = (l: any) => (l && typeof l === "object" ? { visibility: "public", ...l } : null);
+
+Object.assign(calls, {
+  async roomsStart(wasmB64: string) {
+    if (eng) return { ok: true };
+    const E = (globalThis as any).__partii_engine;
+    if (!E) return { ok: false, reason: "unavailable", message: "partii-engine.js isn't loaded" };
+    if (!cfg) return { ok: false, reason: "not_configured" };
+    E.initSync({ module: fromB64(wasmB64) });
+    eng = new E.WebEngine(JSON.stringify({ edge: apiBase(), key: cfg.key, client: `godot/${version || "0"} web`, ...(token ? { player_token: token } : {}), away: true }));
+    return { ok: true };
+  },
+  // opts: {max, kind, name, meta, listing: {name, mode, map, visibility, tags} | null, net_version, settings}
+  async createRoom(o: any = {}) {
+    const e = needRooms();
+    const meta = { ...(o.meta ?? {}), ...(o.listing ? { listing: listing(o.listing) } : {}) };
+    const settings = { max_members: o.max ?? 8, ...(o.net_version ? { net_version: o.net_version } : {}), ...(o.settings ?? {}) };
+    return roomReply(await answer(e.createWith(cfg!.game, o.kind || "player", o.name ?? player?.name ?? "", JSON.stringify(meta), JSON.stringify(settings))));
+  },
+  // opts: {kind, name, meta, password, net_version}
+  async joinRoom(code: string, o: any = {}) {
+    const e = needRooms();
+    const settings = { ...(o.net_version ? { net_version: o.net_version } : {}), ...(o.password ? { password: o.password } : {}) };
+    return roomReply(await answer(e.joinWith(String(code).toUpperCase(), o.kind || "player", o.name ?? player?.name ?? "", JSON.stringify(o.meta ?? {}), JSON.stringify(settings))));
+  },
+  async leaveRoom() { eng?.leave(); roomNow = null; return { ok: true }; },
+  async kick(mid: number) { needRooms().kick(mid); return { ok: true }; },
+  // patch: room fields as PROTOCOL.md "update" (meta, joinable, ...); host only.
+  async updateRoom(patch: any) { needRooms().update(JSON.stringify(patch ?? {})); return { ok: true }; },
+  async setListing(l: any) { needRooms().update(JSON.stringify({ meta: { ...(roomNow?.meta ?? {}), listing: listing(l) } })); return { ok: true }; },
+  async updateMe(name: string | null, meta: any) { needRooms().memberUpdate(JSON.stringify({ ...(name != null ? { name } : {}), ...(meta != null ? { meta } : {}) })); return { ok: true }; },
+  // Lobbies (sdk/ts lobbies.ts): the open rooms, nearest first; quickPlay: the best one's code, or null (then host).
+  async listLobbies(q: any = {}) {
+    const p: Record<string, string> = {};
+    for (const [k, v] of Object.entries(q ?? {})) if (v !== undefined && v !== null && v !== "") p[k] = String(v);
+    return { ok: true, ...((await need().lobbiesList(cfg!.game, p)) as any) };
+  },
+  async quickPlay(q: any = {}) {
+    try { return { ok: true, ...((await need().lobbiesQuickJoin(cfg!.game, q ?? {})) as any) }; }
+    catch (e) { if (e instanceof PartiiError && e.code === "no_lobby") return { ok: true, code: null }; throw e; }
+  },
+});
+
 (window as any).__partii_godot_sdk = {
   session: SESSION,
+  // Synchronous, every frame while in rooms: the events since the last call (JSON array).
+  roomsPoll() { pump(); const q = queue; queue = []; return JSON.stringify(q); },
+  roomsReady() { return !!eng; },
+  room() { return JSON.stringify(roomNow); },
+  online() { return !!eng && eng.online(); },
+  netStats() { return eng ? eng.stats() : "{}"; },
+  // Play traffic: unreliable, bytes as base64. to: a member's mid or 65535 (everyone).
+  send(to: number, b64: string) { eng?.send(to, false, fromB64(b64)); },
+  // Not for gameplay: rare setup messages only (loadout, seed); reliable.
+  sendSetup(to: number, b64: string) { eng?.send(to, true, fromB64(b64)); },
   invoke(name: string, argsJson: string, id: number, cb: (id: number, json: string) => void) {
     const f = calls[name];
     const args = (() => { try { return JSON.parse(argsJson || "[]"); } catch { return []; } })();

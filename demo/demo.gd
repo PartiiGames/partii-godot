@@ -38,6 +38,10 @@ func _ready() -> void:
 	var api := ""
 	if OS.has_feature("web"):
 		var q := str(JavaScriptBridge.eval("location.search", true))
+		if q.contains("partii_room="):
+			# partii test room: the rooms check (demo/rooms_test.gd).
+			get_tree().change_scene_to_file.call_deferred("res://demo/rooms_test.tscn")
+			return
 		probe = q.contains("probe=1")
 		game = _param(q, "game", game)
 		key = _param(q, "key", key)
