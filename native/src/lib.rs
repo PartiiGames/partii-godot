@@ -161,6 +161,52 @@ impl PartiiNative {
     fn net_stats(&self) -> GString {
         self.net.as_ref().map(|e| e.stats().to_string()).unwrap_or_else(|| "{}".into()).pipe_gs()
     }
+
+    /// Keep this game's player token in the OS store. false: no store here (then keep nothing).
+    #[func]
+    fn token_store(game: GString, token: GString) -> bool {
+        keystore::set(&game.to_string(), &token.to_string())
+    }
+    /// The stored token, or "".
+    #[func]
+    fn token_load(game: GString) -> GString {
+        keystore::get(&game.to_string()).unwrap_or_default().pipe_gs()
+    }
+    #[func]
+    fn token_clear(game: GString) -> bool {
+        keystore::clear(&game.to_string())
+    }
+}
+
+// --- The sign-in token in the OS credential store ---
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+mod keystore {
+    fn entry(game: &str) -> Option<keyring::Entry> {
+        keyring::Entry::new("games.partii.player", game).ok()
+    }
+    pub fn set(game: &str, token: &str) -> bool {
+        entry(game).is_some_and(|e| e.set_password(token).is_ok())
+    }
+    pub fn get(game: &str) -> Option<String> {
+        entry(game)?.get_password().ok()
+    }
+    pub fn clear(game: &str) -> bool {
+        entry(game).is_some_and(|e| matches!(e.delete_credential(), Ok(()) | Err(keyring::Error::NoEntry)))
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+mod keystore {
+    pub fn set(_: &str, _: &str) -> bool {
+        false
+    }
+    pub fn get(_: &str) -> Option<String> {
+        None
+    }
+    pub fn clear(_: &str) -> bool {
+        false
+    }
 }
 
 fn json(s: &GString) -> serde_json::Value {
