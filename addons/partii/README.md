@@ -20,7 +20,75 @@ really playing, and tells the game when the page is hidden, and reports analytic
    reaches your game's frame (the `allow` attribute), and review sees it.
 5. In the Web preset's Resources tab, add `addons/partii/partii-sdk.js` to **Filters to export
    non-resource files** (`include_filter`). That file is the Partii web SDK the addon talks to.
+   For multiplayer rooms add `addons/partii/partii-engine.js, addons/partii/partii-engine.wasm` too
+   (the rooms engine, 640 KB, loaded only on the first room call).
 6. `partii web deploy <game> build/web`
+
+## Multiplayer rooms
+
+**The netcode rule:** the host runs the world. Clients send their inputs, the host sends snapshots,
+every packet is unreliable and byte-packed, and the newest state wins. A lost packet is never resent;
+the next one carries what it had. `PartiiNet` does this for you, so start there:
+
+```gdscript
+var inputs := PartiiNet.Inputs.new()        # clients → host: each packet repeats the last 4 inputs
+var snaps := PartiiNet.Snapshots.new()      # host → clients: older snapshots are dropped
+
+func _ready():
+    Partii.message.connect(_on_message)
+    var q = await Partii.quick_play()       # the best open lobby for this build, or code null
+    var r: Dictionary
+    if q.ok and q.code:
+        r = await Partii.join_room(q.code)
+    else:
+        r = await Partii.create_room({"max": 8, "listing": {"name": "Fun room", "mode": "arcade"}})
+    if not r.ok:
+        show_reason(r.reason)               # e.g. family_blocked: show it, never work around it
+
+func _physics_process(_d):
+    if Partii.is_host():
+        step_world()
+        Partii.send(Partii.BROADCAST, snaps.pack(world_bytes()))
+    elif Partii.in_room():
+        Partii.send(Partii.room().host, inputs.pack(my_input_bytes()))
+
+func _on_message(from: int, bytes: PackedByteArray):
+    match PartiiNet.kind(bytes):
+        PartiiNet.KIND_INPUTS:              # host
+            for b in inputs.unpack(from, bytes): apply_input(from, b)
+        PartiiNet.KIND_SNAPSHOT:            # client
+            var w := snaps.unpack(from, bytes)
+            if not w.is_empty(): show_world(w)
+```
+
+| Call | |
+|---|---|
+| `create_room({max, kind, name, meta, listing})` | Host a room. `listing` (`{name, mode, map, visibility, tags}`) lists it in lobbies; leave it out for join-by-code only. |
+| `join_room(code, {kind, name, meta, password})` | Join by code. |
+| `quick_play({mode, region})` | `{ok, code}`: the best open lobby, or `code` null (then host one). |
+| `list_lobbies({mode, region, sort, limit})` | `{ok, enabled, lobbies: [{code, name, mode, map, players, max, region, ...}]}` for a server browser. |
+| `send(to, bytes)` | **Unreliable only**, at most 1199 bytes. `to` is a member's `mid` or `Partii.BROADCAST`. |
+| `update_room(patch)`, `set_listing(l)` | Host only. Room `meta` is the reliable channel: state that must arrive (the map, the round, scores between rounds). |
+| `update_me(name, meta)` | Your own member meta, also reliable (ready, team, skin). |
+| `send_reliable_setup(to, bytes)` | **Not for gameplay.** A rare one-off (a seed, a loadout) when meta doesn't fit. |
+| `leave_room()`, `kick(mid)`, `room()`, `in_room()`, `my_mid()`, `is_host()`, `online()`, `net_stats()` | |
+
+Signals: `room_joined(room)`, `room_left(reason)`, `room_updated(room)`, `member_joined(m)`,
+`member_updated(m)`, `member_left(mid, reason)`, `member_away(mid, until)`, `member_back(mid)`,
+`message(from, bytes)`, `online_changed(online)`, `peer_connected(mid, path)`.
+
+- **The host never moves.** If the host leaves, the room ends (`room_left("host_left")`).
+- **Away is not gone.** A phone sent to the background keeps its seat for 30 s (`member_away`, then
+  `member_back` or `member_left`). Show "away"; don't free the seat.
+- **A joiner can miss the first broadcast.** Have a new member say hello and answer it with the full
+  state.
+- **Builds must match.** Rooms and Quick Play use the project's `partii/net_version` setting (or
+  `application/config/version`), so players on different builds never meet.
+- **Players just join.** There's no role picker; `kind` is your own field and your game decides roles.
+- **Family rules.** A kid's account joins only rooms a parent approved; calls answer
+  `family_blocked` and kids' lobby lists show only allowed rooms. Show the reason.
+
+Test it headless: `node tests/web/rooms.mjs build/web` (a host and 2 guests on Partii staging).
 
 ## Player, saves, purchases
 
@@ -55,6 +123,9 @@ func on_unlock_pressed():                         # from a tap: browsers allow t
   to the account when they sign in later.
 - **Saves** are JSON (Dictionary, Array, numbers, strings), per slot. `save_slot` sends the rev the
   last `load_slot` read, so a save from another device is never overwritten silently.
+- **Never buy for a player.** The player always confirms in Partii's own UI; `buy()` only opens it and
+  answers what they chose. There is no silent buy. A game that buys for a player without their
+  permission is removed from the store and its developer banned. A kid's account answers `age_restricted`.
 - **Purchases:** Partii shows its own buy sheet (an overlay inside Partii, a popup elsewhere), never
   your game. `buy()` reasons: `cancelled`, `popup_blocked` (with `url`), `timeout`,
   `not_signed_in`, `unavailable` (not on the web), `failed`. Items are set up on Partii
