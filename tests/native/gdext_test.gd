@@ -29,8 +29,13 @@ func _ready() -> void:
 		await get_tree().process_frame
 	checks["pending"] = n.pending_writes()
 	checks["save"] = n.read_save("progress")
-	checks["token_store"] = n.token_store("smashii-test", "x")
-	n.token_clear("smashii-test")
+	# The OS store (Keychain on macOS) only when asked: it writes to the user's own keychain and may show
+	# a system prompt. Headless test machines leave it off.
+	if OS.get_environment("PARTII_TEST_KEYCHAIN") == "1":
+		checks["token_store"] = n.token_store("smashii-test", "x")
+		n.token_clear("smashii-test")
+	else:
+		checks["token_store"] = "skipped"
 	n.rooms_start("godot/test linux")
 	var req: int = n.create_room("smashii", "player", "native", "{}", JSON.stringify({"max_members": 4}))
 	t = Time.get_ticks_msec()
