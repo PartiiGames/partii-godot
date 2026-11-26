@@ -15,7 +15,7 @@ func _ready() -> void:
 	n = ClassDB.instantiate("PartiiNative")
 	var dir := ProjectSettings.globalize_path("user://partii")
 	DirAccess.make_dir_recursive_absolute(dir)
-	n.start("smashii", "pk_smashii_web_j0GFKzE395-H9XhsNeaR8t", "https://api-staging.partii.games", dir, "test")
+	n.start("smashii", "pk_smashii_web_j0GFKzE395-H9XhsNeaR8t", "https://api-staging.partii.games", dir, "test", PackedStringArray(["progress"]))
 	var t := Time.get_ticks_msec()
 	while not n.ready() and Time.get_ticks_msec() - t < 30000:
 		await get_tree().process_frame

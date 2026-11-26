@@ -23,8 +23,9 @@ pub struct PartiiNative {
 #[godot_api]
 impl PartiiNative {
     /// Start the account (guest sign-in on this device). data_dir: a user:// folder, globalized.
+    /// slots: the save slots to mirror (only these can be read and written).
     #[func]
-    fn start(&mut self, game: GString, key: GString, edge: GString, data_dir: GString, version: GString) -> bool {
+    fn start(&mut self, game: GString, key: GString, edge: GString, data_dir: GString, version: GString, slots: PackedStringArray) -> bool {
         self.edge = edge.to_string();
         self.key = key.to_string();
         self.acct = Some(Account::start(AccountConfig {
@@ -35,6 +36,7 @@ impl PartiiNative {
             version: version.to_string(),
             platform: std::env::consts::OS.into(),
             analytics: true,
+            slots: slots.as_slice().iter().map(|s| s.to_string()).collect(),
             ..AccountConfig::default()
         }));
         true
