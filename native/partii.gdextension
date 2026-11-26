@@ -8,4 +8,4 @@ reloadable = false
 [libraries]
 linux.x86_64 = "res://addons/partii/bin/libpartii_godot.linux.x86_64.so"
 windows.x86_64 = "res://addons/partii/bin/partii_godot.windows.x86_64.dll"
-macos = "res://addons/partii/bin/libpartii_godot.macos.framework"
+macos = "res://addons/partii/bin/libpartii_godot.macos.universal.dylib"
