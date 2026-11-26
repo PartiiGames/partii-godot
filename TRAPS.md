@@ -96,7 +96,11 @@ for i in st.get_node_count():
 - **The first headless import crashes.** With any Rust GDExtension in a project (a minimal hello-world
   one too; godot-rust 0.5.5 and 0.4.5, Godot 4.6.1 on Linux), the first `godot --headless --import`
   segfaults when the editor exits (exit code 134), and every later import is clean. In CI, run
-  `--import` twice, or ignore the first one's exit code. Not yet checked in the graphical editor.
+  `--import` twice, or ignore the first one's exit code. It's a Godot bug in the editor's GDExtension
+  docs generation, not godot-rust's or this addon's: [godot#111645](https://github.com/godotengine/godot/issues/111645),
+  [godot#111048](https://github.com/godotengine/godot/issues/111048), fix in
+  [godot#123658](https://github.com/godotengine/godot/pull/123658) (open as of 2026-11-25); godot-rust's
+  [gdext#1711](https://github.com/godot-rust/gdext/issues/1711) is the same crash on Windows.
 - **`.gdextension` keys:** use `linux.x86_64`, not `linux.release.x86_64`. The headless editor is a
   debug build, so a release-only key loads nothing, and a script that names the class fails to parse.
 - **Saves are asynchronous.** `write_save` queues; `read_save` returns the slot as last stored, so
