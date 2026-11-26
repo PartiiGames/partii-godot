@@ -3,6 +3,9 @@
 /**              export-ignore
 /addons          -export-ignore
 /addons/**       -export-ignore
+# The browser half's build sources: games use the built partii-sdk.js / partii-engine.*.
+/addons/partii/web/** export-ignore
+/addons/partii/web   export-ignore
 # Line endings stay as written.
 * text=auto eol=lf
 *.png binary

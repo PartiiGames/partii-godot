@@ -19,6 +19,10 @@ check script "plugin.gd"
 for f in addons/partii/plugin.gd addons/partii/partii.gd addons/partii/partii-sdk.js icon.png LICENSE-MIT LICENSE-APACHE; do
   [ -f "$f" ] || { echo "FAIL: $f missing"; fail=1; }
 done
+# The Asset Library zip holds only addons/, so the licenses ship inside it too (same text as the root).
+for f in LICENSE-MIT LICENSE-APACHE; do
+  cmp -s "$f" "addons/partii/$f" || { echo "FAIL: addons/partii/$f differs from $f"; fail=1; }
+done
 # The library's zip is GitHub's archive of the commit: it must hold only addons/ (.gitattributes).
 if git rev-parse HEAD >/dev/null 2>&1; then
   extra=$(git archive HEAD | tar -t | grep -v '^addons/' || true)
