@@ -5,7 +5,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 CFG=addons/partii/plugin.cfg
-EXPECT_VERSION="${EXPECT_VERSION:-0.3.0}"
+EXPECT_VERSION="${EXPECT_VERSION:-0.4.0}"
 fail=0
 check() {
   got=$(sed -n "s/^$1=\"\\(.*\\)\"\$/\\1/p" "$CFG")
@@ -16,7 +16,7 @@ check name "Partii"
 check author "Partii Games"
 check version "$EXPECT_VERSION"
 check script "plugin.gd"
-for f in addons/partii/plugin.gd addons/partii/partii.gd addons/partii/partii-sdk.js icon.png LICENSE; do
+for f in addons/partii/plugin.gd addons/partii/partii.gd addons/partii/partii-sdk.js icon.png LICENSE-MIT LICENSE-APACHE; do
   [ -f "$f" ] || { echo "FAIL: $f missing"; fail=1; }
 done
 # The library's zip is GitHub's archive of the commit: it must hold only addons/ (.gitattributes).
