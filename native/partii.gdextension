@@ -1,3 +1,5 @@
+; Copied into addons/partii/ together with the built libraries in addons/partii/bin/ (tests/native and
+; the release package do this). Not in addons/ by default: without the libraries Godot reports errors.
 [configuration]
 entry_symbol = "gdext_rust_init"
 compatibility_minimum = 4.3
