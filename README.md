@@ -31,7 +31,12 @@ Licensed under MIT OR Apache-2.0, at your option ([LICENSE-MIT](LICENSE-MIT), [L
 2. **Project → Project Settings → Plugins:** enable **Partii**. This adds the `Partii` autoload.
 3. **Export → Web:**
    - turn **Thread Support off** (Partii's iPhone app frame isn't cross-origin isolated);
-   - under Resources, add `addons/partii/partii-sdk.js` to **Filters to export non-resource files**.
+   - under Resources, add `addons/partii/partii-sdk.js` to **Filters to export non-resource files**;
+   - if you installed the release zip (native binaries), add
+     `addons/partii/partii.gdextension, addons/partii/bin/*` to **Filters to exclude files/folders**.
+     The web build doesn't use the native library, and without this filter Godot lists the extension
+     in the web export and the browser console shows "GDExtension dynamic library not found" errors at
+     start (harmless, but noisy). The plugin warns at export time when the filter is missing.
 4. Put a `partii.json` next to the exported `index.html` that declares the hardware you use, with the
    reason players will see (see `web/partii.json`):
    ```json
@@ -84,8 +89,9 @@ device's guest), `sign_in_with_browser` (the guest's progress merges into the ac
   fetched at sign-in. Saves queue and retry offline; `Partii.pending_saves()` is 0 once stored.
 - A signed-in player's token is kept in the OS credential store (Keychain, Credential Manager, Secret
   Service). `PARTII_NO_KEYCHAIN=1` turns that off (tests).
-- Builds: Linux x86_64, macOS universal (arm64 + x86_64, macOS 11+), Windows x86_64. The Windows build
-  is untested on real Windows so far.
+- Builds: Linux x86_64, macOS universal (arm64 + x86_64, macOS 11+, Developer ID signed and
+  notarized), Windows x86_64 (tested on Windows 11 ARM under x64 emulation).
+- Web exports: add the exclude filter from Install step 3.
 
 Known issues are in [TRAPS.md](TRAPS.md#the-native-gdextension-rust-godot-rust).
 
