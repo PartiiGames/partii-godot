@@ -71,6 +71,14 @@ Every call that talks to Partii is awaited and returns a Dictionary: `{ok: true,
 
 More detail, with code, is in [addons/partii/README.md](addons/partii/README.md).
 
+## Native builds (preview)
+
+`native/` is the GDExtension (Rust, over [partii-sdk](https://crates.io/crates/partii) 0.2.1) that
+brings the same calls to desktop exports: guest sign-in, browser sign-in, cloud saves, rooms and
+analytics. It builds and passes its headless test on Linux (`tests/native/`); macOS and Windows
+builds, and wiring it into the `Partii` autoload, come next. Until then the autoload's native
+fallbacks apply. Known issues are in [TRAPS.md](TRAPS.md#the-native-gdextension-rust-godot-rust).
+
 ## The demo
 
 `demo/demo.tscn` is the main scene. Set `GAME` and `KEY` in `demo/demo.gd` (or, on the web, add

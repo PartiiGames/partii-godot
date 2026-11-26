@@ -90,3 +90,18 @@ for i in st.get_node_count():
 - **Tap game coordinates, not page coordinates.** With `stretch_mode = viewport` and `keep`, the game
   is scaled by `min(w / W, h / H)` and centred. Read a button's real position from a screenshot or
   from the scene, not from a guess at its anchors.
+
+## The native GDExtension (Rust, godot-rust)
+
+- **The first headless import crashes.** With any Rust GDExtension in a project (a minimal hello-world
+  one too; godot-rust 0.5.5 and 0.4.5, Godot 4.6.1 on Linux), the first `godot --headless --import`
+  segfaults when the editor exits (exit code 134), and every later import is clean. In CI, run
+  `--import` twice, or ignore the first one's exit code. Not yet checked in the graphical editor.
+- **`.gdextension` keys:** use `linux.x86_64`, not `linux.release.x86_64`. The headless editor is a
+  debug build, so a release-only key loads nothing, and a script that names the class fails to parse.
+- **Saves are asynchronous.** `write_save` queues; `read_save` returns the slot as last stored, so
+  wait for `pending_writes() == 0` before reading back (or before quitting).
+- **Only the slots passed to `start()` are mirrored.** Reading or writing any other slot does nothing.
+- **Headless Linux has no Secret Service,** so `token_store` returns false there; keep nothing then.
+- **Compiling godot-rust's bindings takes about 5 GB** of memory with a cold target folder; with
+  4 parallel jobs it peaks higher. Use `CARGO_BUILD_JOBS=2` on small CI machines.
