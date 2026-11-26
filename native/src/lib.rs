@@ -66,6 +66,11 @@ impl PartiiNative {
     fn write_save(&self, slot: GString, json: GString) -> bool {
         self.acct.as_ref().is_some_and(|a| a.write_save(&slot.to_string(), &json.to_string()))
     }
+    /// Writes not yet stored by Partii (wait for 0 before quitting if a save must not be lost).
+    #[func]
+    fn pending_writes(&self) -> i64 {
+        self.acct.as_ref().map_or(0, |a| a.pending_writes() as i64)
+    }
     #[func]
     fn owns(&self, sku: GString) -> i32 {
         match self.acct.as_ref().and_then(|a| a.owns(&sku.to_string())) {

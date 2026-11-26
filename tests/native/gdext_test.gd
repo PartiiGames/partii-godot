@@ -24,6 +24,10 @@ func _ready() -> void:
 	checks["guest"] = n.is_guest()
 	checks["error"] = n.error()
 	n.write_save("progress", JSON.stringify({"n": 7}))
+	t = Time.get_ticks_msec()
+	while n.pending_writes() > 0 and Time.get_ticks_msec() - t < 15000:
+		await get_tree().process_frame
+	checks["pending"] = n.pending_writes()
 	checks["save"] = n.read_save("progress")
 	checks["token_store"] = n.token_store("smashii-test", "x")
 	n.token_clear("smashii-test")
