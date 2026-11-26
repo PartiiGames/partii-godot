@@ -16,7 +16,7 @@ check name "Partii"
 check author "Partii Games"
 check version "$EXPECT_VERSION"
 check script "plugin.gd"
-for f in addons/partii/plugin.gd addons/partii/partii.gd addons/partii/partii-sdk.js icon.png LICENSE-MIT LICENSE-APACHE; do
+for f in addons/partii/plugin.gd addons/partii/partii.gd addons/partii/partii-sdk.js addons/partii/THIRD-PARTY-NOTICES.txt icon.png LICENSE-MIT LICENSE-APACHE; do
   [ -f "$f" ] || { echo "FAIL: $f missing"; fail=1; }
 done
 # The Asset Library zip holds only addons/, so the licenses ship inside it too (same text as the root).

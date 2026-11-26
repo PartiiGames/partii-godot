@@ -127,3 +127,5 @@ one `PROBE {json}` console line every 250 ms with its state; the tests read thos
 ```sh
 PARTII_SDK=<the Partii web SDK source, sdk/ts/src> ESBUILD=esbuild addons/partii/web/build.sh
 ```
+
+After rebuilding, regenerate the browser half's third-party notices: `PARTII_MONOREPO=<partii monorepo> tools/web-notices.sh` (writes `addons/partii/THIRD-PARTY-NOTICES.txt`).

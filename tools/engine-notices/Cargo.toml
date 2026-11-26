@@ -1,0 +1,11 @@
+[package]
+name = "partii-engine-web"
+version = "0.0.0"
+edition = "2021"
+publish = false
+[lib]
+path = "src/lib.rs"
+[dependencies]
+# Same pin as platform/crates/partii-engine (the web build: no "native" feature).
+partii-net = { git = "https://github.com/PartiiGames/partii-sdk", rev = "4bb16c3", default-features = false }
+[workspace]
