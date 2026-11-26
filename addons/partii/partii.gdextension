@@ -4,6 +4,6 @@ compatibility_minimum = 4.3
 reloadable = false
 
 [libraries]
-linux.release.x86_64 = "res://addons/partii/bin/libpartii_godot.linux.x86_64.so"
-windows.release.x86_64 = "res://addons/partii/bin/partii_godot.windows.x86_64.dll"
-macos.release = "res://addons/partii/bin/libpartii_godot.macos.framework"
+linux.x86_64 = "res://addons/partii/bin/libpartii_godot.linux.x86_64.so"
+windows.x86_64 = "res://addons/partii/bin/partii_godot.windows.x86_64.dll"
+macos = "res://addons/partii/bin/libpartii_godot.macos.framework"

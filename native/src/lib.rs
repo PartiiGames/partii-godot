@@ -164,16 +164,16 @@ impl PartiiNative {
 
     /// Keep this game's player token in the OS store. false: no store here (then keep nothing).
     #[func]
-    fn token_store(game: GString, token: GString) -> bool {
+    fn token_store(&self, game: GString, token: GString) -> bool {
         keystore::set(&game.to_string(), &token.to_string())
     }
     /// The stored token, or "".
     #[func]
-    fn token_load(game: GString) -> GString {
+    fn token_load(&self, game: GString) -> GString {
         keystore::get(&game.to_string()).unwrap_or_default().pipe_gs()
     }
     #[func]
-    fn token_clear(game: GString) -> bool {
+    fn token_clear(&self, game: GString) -> bool {
         keystore::clear(&game.to_string())
     }
 }
