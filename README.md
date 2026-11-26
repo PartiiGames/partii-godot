@@ -49,7 +49,7 @@ Every call that talks to Partii is awaited and returns a Dictionary: `{ok: true,
 
 | Call | What |
 |---|---|
-| `Partii.available()` | `true` on a web build with the SDK; `false` on desktop/native (the fallbacks run). |
+| `Partii.available()` | `true` on a web build with the SDK or a native build with the GDExtension; else `false` (the fallbacks run). |
 | `await Partii.configure(game, key, api := "")` | Once, at start. `api` only to point at another Partii API (staging). |
 | `await Partii.sign_in()` | `{ok, player: {id, name, guest}}`. Inside Partii (its app or partii.games): the account, no tap. Elsewhere: this device's guest, whose saves, items and scores move to the account on sign-in. |
 | `await Partii.load_slot(slot)` | `{ok, data, rev}`; `data` is `null` before the first save. Off the web: `user://partii/<slot>.json`. |
@@ -74,10 +74,20 @@ More detail, with code, is in [addons/partii/README.md](addons/partii/README.md)
 ## Native builds (preview)
 
 `native/` is the GDExtension (Rust, over [partii-sdk](https://crates.io/crates/partii) 0.2.1) that
-brings the same calls to desktop exports: guest sign-in, browser sign-in, cloud saves, rooms and
-analytics. It builds and passes its headless test on Linux (`tests/native/`); macOS and Windows
-builds, and wiring it into the `Partii` autoload, come next. Until then the autoload's native
-fallbacks apply. Known issues are in [TRAPS.md](TRAPS.md#the-native-gdextension-rust-godot-rust).
+brings the same calls to desktop exports. With its binaries in `addons/partii/bin/` (from the release
+zip), `Partii.backend()` is `"native"` and these work as on the web: `configure`, `sign_in` (this
+device's guest), `sign_in_with_browser` (the guest's progress merges into the account), `sign_out`,
+`load_slot` / `save_slot`, `owns`, `track`, and rooms, lobbies and Quick Play. Not yet native: `buy`,
+`unlock`, `submit_score`, `leaderboard` (they answer `unavailable`).
+
+- List your save slots in the project setting `partii/save_slots` (default `["progress"]`): they are
+  fetched at sign-in. Saves queue and retry offline; `Partii.pending_saves()` is 0 once stored.
+- A signed-in player's token is kept in the OS credential store (Keychain, Credential Manager, Secret
+  Service). `PARTII_NO_KEYCHAIN=1` turns that off (tests).
+- Builds: Linux x86_64, macOS universal (arm64 + x86_64, macOS 11+), Windows x86_64. The Windows build
+  is untested on real Windows so far.
+
+Known issues are in [TRAPS.md](TRAPS.md#the-native-gdextension-rust-godot-rust).
 
 ## The demo
 
