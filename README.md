@@ -10,7 +10,7 @@ code path fits desktop, native and web.
 It came out of porting a Godot 3 tilt-to-steer arcade game to Godot 4 and Partii. The things that
 cost the most time on that port are in [TRAPS.md](TRAPS.md).
 
-MIT licensed ([LICENSE](LICENSE)), by Partii Games. This repo is the source of truth; [partii-examples](https://github.com/PartiiGames/partii-examples) example 13 points here. Godot 4.3 or newer (tested on 4.6.1), Compatibility renderer.
+Licensed under MIT OR Apache-2.0, at your option ([LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE)), by Partii Games LLC. This repo is the source of truth; [partii-examples](https://github.com/PartiiGames/partii-examples) example 13 points here. Godot 4.3 or newer (tested on 4.6.1), Compatibility renderer.
 
 ## What's here
 
