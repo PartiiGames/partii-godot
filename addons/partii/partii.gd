@@ -125,6 +125,8 @@ const _JS := """
 var _web := false
 var _visible := true
 var _sdk: JavaScriptObject = null
+## The GDExtension (native desktop builds with addons/partii/bin/), else null.
+var _nat: RefCounted = null
 var _cb: JavaScriptObject = null
 var _next_id := 0
 var _owned := {}
@@ -153,6 +155,16 @@ func _ready() -> void:
 			_cb = JavaScriptBridge.create_callback(_on_reply)
 		else:
 			push_warning("Partii: partii-sdk.js isn't in the export (add addons/partii/partii-sdk.js to include_filter)")
+	elif ClassDB.class_exists("PartiiNative"):
+		_nat = ClassDB.instantiate("PartiiNative")
+
+func _notification(what: int) -> void:
+	if _nat == null or not _rooms_on:
+		return
+	if what == NOTIFICATION_APPLICATION_PAUSED:
+		_nat.away()
+	elif what == NOTIFICATION_APPLICATION_RESUMED:
+		_nat.back()
 
 func _process(_delta: float) -> void:
 	if _rooms_on:
@@ -217,14 +229,31 @@ func _call(name: String, args: Array = []) -> Dictionary:
 			return got[1]
 	return {}
 
-## Partii is reachable here (a web build with the SDK bundle).
+## Partii is reachable here (a web build with the SDK bundle, or a native build with the GDExtension).
 func available() -> bool:
-	return _sdk != null
+	return _sdk != null or _nat != null
+
+## The OS credential store keeps a signed-in player's token (Keychain, Credential Manager, Secret
+## Service). PARTII_NO_KEYCHAIN=1 turns it off (tests).
+func _keychain() -> bool:
+	return OS.get_environment("PARTII_NO_KEYCHAIN") != "1"
+
+func _version() -> String:
+	return str(ProjectSettings.get_setting("application/config/version", ""))
+
+## Native: (re)start the account, as the stored or given player, else this device's guest.
+func _start_native(token: String) -> void:
+	DirAccess.make_dir_recursive_absolute("user://partii")
+	var slots := PackedStringArray(ProjectSettings.get_setting("partii/save_slots", ["progress"]))
+	_nat.start(_cfg.game, _cfg.key, _cfg.api, ProjectSettings.globalize_path("user://partii"), _version(), slots, token)
 
 ## The version is the project's application/config/version (Project Settings), for analytics.
 func configure(game: String, key: String, api := "") -> Dictionary:
 	_cfg = {"game": game, "key": key, "api": api if api != "" else "https://api.partii.games"}
-	var r := await _call("configure", [game, key, api, str(ProjectSettings.get_setting("application/config/version", ""))])
+	if _nat != null:
+		_start_native(str(_nat.token_load(game)) if _keychain() else "")
+		return {"ok": true}
+	var r := await _call("configure", [game, key, api, _version()])
 	if r.get("ok"):
 		track("motion", {"state": _state})
 	return r
@@ -232,6 +261,14 @@ func configure(game: String, key: String, api := "") -> Dictionary:
 ## The Partii account when Partii can vouch for it (its app or partii.games: no tap), else this device's
 ## guest (whose saves move to the account when the player signs in). Off the web: a local guest.
 func sign_in() -> Dictionary:
+	if _nat != null:
+		var until := Time.get_ticks_msec() + 20000
+		while not _nat.ready():
+			if Time.get_ticks_msec() > until:
+				return {"ok": false, "reason": "offline", "message": str(_nat.error())}
+			await get_tree().process_frame
+		_player_token = str(_nat.player_token())
+		return {"ok": true, "player": _native_player()}
 	if _sdk == null:
 		return {"ok": true, "player": {"id": "", "name": "", "guest": true}, "local": true}
 	var r := await _call("signIn")
@@ -239,8 +276,29 @@ func sign_in() -> Dictionary:
 		await items()
 	return r
 
-## A save slot's data (anything JSON). Off the web: user://partii/<slot>.json.
+## Native: forget the signed-in player (and its stored token); carry on as this device's guest.
+func sign_out() -> Dictionary:
+	if _nat == null:
+		return {"ok": false, "reason": "unavailable"}
+	_nat.token_clear(str(_cfg.get("game", "")))
+	_player_token = ""
+	_start_native("")
+	var r := await sign_in()
+	if r.get("ok"):
+		player_changed.emit(r.player)
+		if _rooms_on:
+			_nat.rooms_auth(_player_token)
+	return r
+
+func _native_player() -> Dictionary:
+	return {"id": str(_nat.player_id()), "name": "", "guest": bool(_nat.is_guest())}
+
+## A save slot's data (anything JSON). Native: list slots in the project setting partii/save_slots
+## (default ["progress"]) so they're fetched at sign-in. No Partii here: user://partii/<slot>.json.
 func load_slot(slot: String) -> Dictionary:
+	if _nat != null:
+		var s := str(_nat.read_save(slot))
+		return {"ok": true, "data": JSON.parse_string(s) if s != "" else null}
 	if _sdk == null:
 		var f := FileAccess.open("user://partii/%s.json" % slot, FileAccess.READ)
 		return {"ok": true, "data": JSON.parse_string(f.get_as_text()) if f else null, "rev": 0, "local": true}
@@ -252,6 +310,9 @@ func load_slot(slot: String) -> Dictionary:
 ## Writes a save slot. A newer save from another device: {ok: false, reason: "conflict", theirs}; merge
 ## and save again (load_slot() first takes their rev).
 func save_slot(slot: String, data) -> Dictionary:
+	if _nat != null:
+		# Native saves queue and retry offline; partii-sdk merges a newer save from another device.
+		return {"ok": bool(_nat.write_save(slot, JSON.stringify(data)))}
 	if _sdk == null:
 		DirAccess.make_dir_recursive_absolute("user://partii")
 		var f := FileAccess.open("user://partii/%s.json" % slot, FileAccess.WRITE)
@@ -292,7 +353,13 @@ func unlock() -> Dictionary:
 	return r
 
 func owns(item: String) -> bool:
+	if _nat != null:
+		return int(_nat.owns(item)) == 1
 	return _owned.has(item)
+
+## Writes Partii hasn't stored yet (native; wait for 0 before quitting when a save must not be lost).
+func pending_saves() -> int:
+	return int(_nat.pending_writes()) if _nat != null else 0
 
 ## Buy an item (call it from a tap: browsers allow the popup only then). Partii shows its own buy sheet.
 ## {ok: true} once bought, or {ok: false, reason}: cancelled, popup_blocked (with url), not_signed_in,
@@ -340,7 +407,9 @@ func is_playing() -> bool:
 ## An analytics event: a name (lowercase letters, digits, _ and .) and flat props (strings, numbers,
 ## bools; about 1 KB). Sent in batches with the session, the device and the version. Off the web: nothing.
 func track(event: String, props := {}) -> void:
-	if _sdk != null:
+	if _nat != null:
+		_nat.track(event, JSON.stringify(props))
+	elif _sdk != null:
 		_call("track", [event, props])
 
 
@@ -371,12 +440,14 @@ var _room := {}
 var _rooms_on := false
 var _online := false
 
-## "web", "native" (later: the GDExtension) or "none".
+## "web", "native" (the GDExtension) or "none".
 func backend() -> String:
-	return "web" if _sdk != null else "none"
+	return "web" if _sdk != null else ("native" if _nat != null else "none")
 
 ## What this build can do: "rooms", "saves", "shop", "scores", "motion".
 func has(feature: String) -> bool:
+	if _nat != null:
+		return feature in ["rooms", "saves", "motion", "lobbies"]
 	if _sdk == null:
 		return feature == "motion" and not _web
 	return feature in ["rooms", "saves", "shop", "scores", "motion", "lobbies"]
@@ -387,6 +458,10 @@ func _net_version() -> String:
 
 func _start_rooms() -> Dictionary:
 	if _rooms_on:
+		return {"ok": true}
+	if _nat != null:
+		_nat.rooms_start("godot")
+		_rooms_on = true
 		return {"ok": true}
 	if _sdk == null:
 		return {"ok": false, "reason": "unavailable"}
@@ -416,6 +491,13 @@ func create_room(opts := {}) -> Dictionary:
 		return s
 	var o := opts.duplicate()
 	o["net_version"] = _net_version()
+	if _nat != null:
+		var meta: Dictionary = (o.get("meta", {}) as Dictionary).duplicate()
+		if o.get("listing") is Dictionary:
+			meta["listing"] = _listing(o.listing)
+		var settings := {"max_members": int(o.get("max", 8)), "net_version": o.net_version}
+		settings.merge(o.get("settings", {}), true)
+		return _entered(await _answer(_nat.create_room(_cfg.game, str(o.get("kind", "player")), str(o.get("name", "")), JSON.stringify(meta), JSON.stringify(settings))))
 	return _entered(await _call("createRoom", [o]))
 
 ## Join by code. opts: {kind, name, meta, password}.
@@ -425,50 +507,101 @@ func join_room(code: String, opts := {}) -> Dictionary:
 		return s
 	var o := opts.duplicate()
 	o["net_version"] = _net_version()
+	if _nat != null:
+		var settings := {"net_version": o.net_version}
+		if o.has("password"):
+			settings["password"] = o.password
+		return _entered(await _answer(_nat.join_room(code.to_upper(), str(o.get("kind", "player")), str(o.get("name", "")), JSON.stringify(o.get("meta", {})), JSON.stringify(settings))))
 	return _entered(await _call("joinRoom", [code, o]))
 
 ## The best open lobby for this build → {ok, code} (code null: none open, so host one).
 func quick_play(opts := {}) -> Dictionary:
 	var o := opts.duplicate()
 	o["net_version"] = _net_version()
+	if _nat != null:
+		var r := await _api("POST", "/v1/games/%s/lobbies/quick-join" % _cfg.get("game", "").uri_encode(), o)
+		if not r.ok and r.get("reason") == "no_lobby":
+			return {"ok": true, "code": null}
+		return r
 	return await _call("quickPlay", [o])
 
 ## Open lobbies, nearest first. opts: {mode, region, sort, limit, has_space} → {ok, enabled, lobbies}.
 func list_lobbies(opts := {}) -> Dictionary:
 	var o := opts.duplicate()
 	o["net_version"] = _net_version()
+	if _nat != null:
+		var q := PackedStringArray()
+		for k in o:
+			if o[k] != null and str(o[k]) != "":
+				q.append("%s=%s" % [str(k).uri_encode(), str(o[k]).uri_encode()])
+		return await _api("GET", "/v1/games/%s/lobbies?%s" % [_cfg.get("game", "").uri_encode(), "&".join(q)], null)
 	return await _call("listLobbies", [o])
 
 func leave_room() -> void:
 	if _rooms_on:
-		_call("leaveRoom")
+		if _nat != null:
+			_nat.leave_room()
+		else:
+			_call("leaveRoom")
 	_room = {}
 
 ## Host only.
 func kick(mid: int) -> void:
-	_call("kick", [mid])
+	if _nat != null:
+		_nat.kick(mid)
+	else:
+		_call("kick", [mid])
 
 ## Host only: room fields (meta, joinable, ...). The reliable channel for game state that must arrive.
 func update_room(patch: Dictionary) -> void:
-	_call("updateRoom", [patch])
+	if _nat != null:
+		_nat.update_room(JSON.stringify(patch))
+	else:
+		_call("updateRoom", [patch])
+
+func _listing(l) -> Variant:
+	if not l is Dictionary:
+		return null
+	var d := {"visibility": "public"}
+	d.merge(l, true)
+	return d
 
 ## Host only: list the room in lobbies (or null to unlist).
 func set_listing(listing) -> void:
-	_call("setListing", [listing])
+	if _nat != null:
+		var meta: Dictionary = (_room.get("meta", {}) as Dictionary).duplicate() if _room.get("meta") is Dictionary else {}
+		meta["listing"] = _listing(listing)
+		_nat.update_room(JSON.stringify({"meta": meta}))
+	else:
+		_call("setListing", [listing])
 
 ## Your own name and/or meta (null keeps it); the others get member_updated.
 func update_me(name = null, meta = null) -> void:
-	_call("updateMe", [name, meta])
+	if _nat != null:
+		var p := {}
+		if name != null:
+			p["name"] = name
+		if meta != null:
+			p["meta"] = meta
+		_nat.update_me(JSON.stringify(p))
+	else:
+		_call("updateMe", [name, meta])
 
 ## Play traffic: unreliable, at most 1199 bytes. to: a member's mid or Partii.BROADCAST.
 func send(to: int, bytes: PackedByteArray) -> void:
 	if _rooms_on and bytes.size() > 0:
-		_sdk.send(to, Marshalls.raw_to_base64(bytes))
+		if _nat != null:
+			_nat.send(to, bytes)
+		else:
+			_sdk.send(to, Marshalls.raw_to_base64(bytes))
 
 ## NOT for gameplay: a rare reliable setup message (a seed, a loadout). Use room meta first.
 func send_reliable_setup(to: int, bytes: PackedByteArray) -> void:
 	if _rooms_on and bytes.size() > 0:
-		_sdk.sendSetup(to, Marshalls.raw_to_base64(bytes))
+		if _nat != null:
+			_nat.send_reliable_setup(to, bytes)
+		else:
+			_sdk.sendSetup(to, Marshalls.raw_to_base64(bytes))
 
 func room() -> Dictionary:
 	return _room
@@ -488,15 +621,68 @@ func online() -> bool:
 func net_stats() -> Dictionary:
 	if not _rooms_on:
 		return {}
-	var d = JSON.parse_string(str(_sdk.netStats()))
+	var d = JSON.parse_string(str(_nat.net_stats() if _nat != null else _sdk.netStats()))
 	return d if d is Dictionary else {}
 
+## Native: create/join answers by request id, filled by _pump_rooms.
+var _answers := {}
+
+func _answer(req: int) -> Dictionary:
+	if req < 0:
+		return {"ok": false, "reason": "unavailable"}
+	var until := Time.get_ticks_msec() + 20000
+	while not _answers.has(req):
+		if Time.get_ticks_msec() > until:
+			return {"ok": false, "reason": "timeout"}
+		await get_tree().process_frame
+	var r: Dictionary = _answers[req]
+	_answers.erase(req)
+	return r
+
+## Native: the engine sends room changes as events; keep the room here (the web engine keeps its own).
+func _native_member(m: Dictionary, gone := false) -> void:
+	var ms: Array = _room.get("members", [])
+	for i in ms.size():
+		if int(ms[i].get("mid", -1)) == int(m.get("mid", -2)):
+			if gone:
+				ms.remove_at(i)
+			else:
+				ms[i] = m
+			return
+	if not gone:
+		ms.append(m)
+	_room["members"] = ms
+
+func _native_status(mid: int, status: String) -> void:
+	for m in _room.get("members", []):
+		if int(m.get("mid", -1)) == mid:
+			m["status"] = status
+
 func _pump_rooms() -> void:
-	var evs = JSON.parse_string(str(_sdk.roomsPoll()))
+	var evs = JSON.parse_string(str(_nat.rooms_poll() if _nat != null else _sdk.roomsPoll()))
 	if not evs is Array:
 		return
 	for e in evs:
-		match str(e.get("ev", "")):
+		var ev := str(e.get("ev", ""))
+		if _nat != null:
+			match ev:
+				"created", "joined":
+					_answers[int(e.get("req", -1))] = {"ok": true, "room": e.get("room", {})}
+				"failed":
+					_answers[int(e.get("req", -1))] = {"ok": false, "reason": str(e.get("code", "")), "message": str(e.get("message", ""))}
+					continue
+				"member_joined", "member_updated":
+					_native_member(e.get("member", {}))
+				"member_left":
+					_native_member({"mid": e.get("mid", -1)}, true)
+				"member_away", "member_suspended":
+					_native_status(int(e.get("mid", -1)), "suspended")
+				"member_back", "member_resumed":
+					_native_status(int(e.get("mid", -1)), "active")
+				"message":
+					message.emit(int(e.get("from", -1)), _nat.message_bytes(int(e.get("i", -1))))
+					continue
+		match ev:
 			"online":
 				_online = true
 				online_changed.emit(true)
@@ -535,6 +721,8 @@ func _pump_rooms() -> void:
 				push_warning("Partii rooms: %s" % e.get("message", ""))
 
 func _sync_room() -> void:
+	if _nat != null:
+		return
 	var r = JSON.parse_string(str(_sdk.room()))
 	if r is Dictionary:
 		_room = r
@@ -553,13 +741,20 @@ signal browser_login_code(code: String, verify_url: String)
 signal player_changed(player: Dictionary)
 
 func _api_post(path: String, body: Dictionary) -> Dictionary:
+	return await _api("POST", path, body, false)
+
+## An HTTP call to the Partii API with the game's key (and the player's token when `player`).
+func _api(method: String, path: String, body, player := true) -> Dictionary:
 	if _cfg.is_empty():
 		return {"ok": false, "reason": "not_configured"}
 	var h := HTTPRequest.new()
 	h.timeout = 20.0
 	add_child(h)
 	var headers := PackedStringArray(["content-type: application/json", "x-partii-key: %s" % _cfg.key])
-	var err := h.request(str(_cfg.api) + path, headers, HTTPClient.METHOD_POST, JSON.stringify(body))
+	if player and _player_token != "":
+		headers.append("authorization: Bearer %s" % _player_token)
+	var m := HTTPClient.METHOD_GET if method == "GET" else HTTPClient.METHOD_POST
+	var err := h.request(str(_cfg.api) + path, headers, m, JSON.stringify(body) if body != null else "")
 	if err != OK:
 		h.queue_free()
 		return {"ok": false, "reason": "offline", "message": error_string(err)}
@@ -611,6 +806,13 @@ func sign_in_with_browser(return_url := "") -> Dictionary:
 				interval = float(p.get("interval_s", interval))
 			"approved":
 				_player_token = str(p.get("player_token", ""))
+				if _nat != null:
+					# The account (and a live rooms connection) carry on as the signed-in player.
+					if _keychain():
+						_nat.token_store(str(_cfg.game), _player_token)
+					_start_native(_player_token)
+					if _rooms_on:
+						_nat.rooms_auth(_player_token)
 				var pl: Dictionary = p.get("player", {})
 				player_changed.emit(pl)
 				return {"ok": true, "player": pl, "merged": p.get("merged", false)}

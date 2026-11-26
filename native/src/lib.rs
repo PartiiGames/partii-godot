@@ -17,20 +17,28 @@ pub struct PartiiNative {
     net: Option<Engine>,
     edge: String,
     key: String,
+    /// The last rooms_poll's message payloads, by index (message events carry `i`, not the bytes).
+    msgs: Vec<Vec<u8>>,
     base: Base<RefCounted>,
 }
 
 #[godot_api]
 impl PartiiNative {
-    /// Start the account (guest sign-in on this device). data_dir: a user:// folder, globalized.
-    /// slots: the save slots to mirror (only these can be read and written).
+    /// Start the account. data_dir: a user:// folder, globalized. slots: the save slots fetched at
+    /// sign-in. player_token: a signed-in player's token (from token_load or a browser sign-in), or ""
+    /// for this device's guest. Calling it again restarts the account (e.g. after a browser sign-in).
     #[func]
-    fn start(&mut self, game: GString, key: GString, edge: GString, data_dir: GString, version: GString, slots: PackedStringArray) -> bool {
+    fn start(&mut self, game: GString, key: GString, edge: GString, data_dir: GString, version: GString, slots: PackedStringArray, player_token: GString) -> bool {
+        if let Some(a) = self.acct.take() {
+            a.end_session(std::time::Duration::from_millis(500));
+        }
+        let tok = player_token.to_string();
         self.edge = edge.to_string();
         self.key = key.to_string();
         self.acct = Some(Account::start(AccountConfig {
             edge: self.edge.clone(),
             key: Some(self.key.clone()),
+            player_token: (!tok.is_empty()).then_some(tok),
             game: game.to_string(),
             data_dir: data_dir.to_string().into(),
             version: version.to_string(),
@@ -48,6 +56,12 @@ impl PartiiNative {
     #[func]
     fn player_id(&self) -> GString {
         self.acct.as_ref().and_then(|a| a.player_id()).unwrap_or_default().pipe_gs()
+    }
+    /// The session's token, for this process only (browser sign-in sends it as guest_token so the guest's
+    /// progress merges). Never print or log it.
+    #[func]
+    fn player_token(&self) -> GString {
+        self.acct.as_ref().and_then(|a| a.player_token()).unwrap_or_default().pipe_gs()
     }
     #[func]
     fn is_guest(&self) -> bool {
@@ -115,10 +129,56 @@ impl PartiiNative {
         }
         true
     }
-    /// Events since the last call, as a JSON array (messages as {ev: "message", from, bytes: [..]}).
+    /// Events since the last call, as a JSON array. Messages come as {ev: "message", from, reliable, i}:
+    /// message_bytes(i) has the payload until the next rooms_poll.
     #[func]
-    fn rooms_poll(&self) -> GString {
-        self.net.as_ref().map(|e| serde_json::to_string(&e.poll()).unwrap_or_else(|_| "[]".into())).unwrap_or_else(|| "[]".into()).pipe_gs()
+    fn rooms_poll(&mut self) -> GString {
+        self.msgs.clear();
+        let Some(e) = &self.net else { return "[]".to_string().pipe_gs() };
+        let mut out = Vec::new();
+        for ev in e.poll() {
+            match ev {
+                partii::net::Event::Message { from, reliable, bytes } => {
+                    out.push(serde_json::json!({"ev": "message", "from": from, "reliable": reliable, "i": self.msgs.len()}));
+                    self.msgs.push(bytes);
+                }
+                other => out.push(serde_json::to_value(&other).unwrap_or_default()),
+            }
+        }
+        serde_json::to_string(&out).unwrap_or_else(|_| "[]".into()).pipe_gs()
+    }
+    #[func]
+    fn message_bytes(&self, i: i64) -> PackedByteArray {
+        self.msgs.get(i as usize).map(|b| PackedByteArray::from(b.as_slice())).unwrap_or_default()
+    }
+    /// Your own name and/or meta: {name?, meta?}.
+    #[func]
+    fn update_me(&self, patch_json: GString) {
+        if let Some(e) = &self.net {
+            let p = json(&patch_json);
+            e.member_update(p["name"].as_str(), p.get("meta").cloned().filter(|m| !m.is_null()));
+        }
+    }
+    /// The app went to the background: keep the seat (other members get member_away).
+    #[func]
+    fn away(&self) {
+        if let Some(e) = &self.net {
+            e.away();
+        }
+    }
+    #[func]
+    fn back(&self) {
+        if let Some(e) = &self.net {
+            e.back();
+        }
+    }
+    /// Sign the live rooms connection in as this token's player (after a browser sign-in).
+    #[func]
+    fn rooms_auth(&self, player_token: GString) {
+        if let Some(e) = &self.net {
+            let t = player_token.to_string();
+            e.auth((!t.is_empty()).then_some(t));
+        }
     }
     #[func]
     fn create_room(&self, game: GString, kind: GString, name: GString, meta_json: GString, settings_json: GString) -> i64 {
